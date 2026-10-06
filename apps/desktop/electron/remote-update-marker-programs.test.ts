@@ -41,7 +41,9 @@ test.skipIf(process.platform === 'win32')('the remote marker judge agrees with e
 })
 
 // The same replay through the PowerShell judge Windows remotes run, with each
-// case's live table and the corpus clock injected over its fact seams.
+// case's live table and the corpus clock injected over its fact seams. A cold
+// pwsh start alone is seconds on a CI runner, past the electron project's 5s
+// default, so the replay carries its own budget.
 const PS_DRIVER = String.raw`
 function Get-MarkerProcessFacts([int]$ownerId){if($script:live.ContainsKey([int64]$ownerId)){return @{Alive=$true;Ct=$script:live[[int64]$ownerId]}};return @{Alive=$false}}
 function Get-MarkerNow{[int64]$script:corpus.now}
@@ -83,7 +85,7 @@ test.skipIf(!powershell)('the Windows remote marker judge agrees with every corp
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
-})
+}, 60_000)
 
 // A dead claim whose checkout lock is still flocked (a killed updater's completion
 // child) must be kept: the gate answers HELD instead of unlinking it (review G1).
