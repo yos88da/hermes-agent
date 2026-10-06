@@ -25,9 +25,12 @@ def bind_route_entry(agent: Any, entry: Dict[str, Any], provider: str, model: st
         _reresolve_fallback_reasoning_config, _rescope_fallback_extra_body, _update_fallback_context_compressor,
     )
     from hermes_cli.fallback_config import resolve_entry_api_key
+    from hermes_cli.runtime_provider_custom import expand_direct_api_alias
     # Pass the entry's base_url/api_key so custom endpoints (Ollama Cloud) resolve instead
-    # of falling through to OpenRouter defaults.
-    base_url_hint = (entry.get("base_url") or "").strip() or None
+    # of falling through to OpenRouter defaults. ``provider: openai`` means the user's OpenAI
+    # endpoint here too, the same alias every other configured route expands.
+    provider, base_url_hint = expand_direct_api_alias(provider, (entry.get("base_url") or "").strip() or None)
+    base_url_hint = base_url_hint or None
     api_key_hint = resolve_entry_api_key(entry)
     api_mode_explicit, api_mode = _fallback_api_mode_hint(entry, provider, base_url_hint)
     # Ollama Cloud: OLLAMA_API_KEY from env when the entry has no key. Host match, not
@@ -50,7 +53,7 @@ def bind_route_entry(agent: Any, entry: Dict[str, Any], provider: str, model: st
         try:
             from hermes_cli.model_normalize import normalize_model_for_provider
             model = normalize_model_for_provider(model, provider)
-        except Exception as norm_err:
+        except Exception as norm_err:  # health: allow BLE001 -- moved verbatim from try_activate_fallback; a bad catalog entry keeps the raw id
             logger.warning("Could not normalize fallback model %r for provider %r: %s", model, provider, norm_err)
         base_url = str(client.base_url)
         from hermes_cli.providers import is_actual_route
