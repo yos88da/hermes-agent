@@ -112,23 +112,8 @@ import { useTheme } from "@/themes";
 import { useProfileScope } from "@/contexts/useProfileScope";
 import { errorMessage } from "@/lib/api-error";
 
-// Per-tab keep-alive identity (`?attach=`): lives in pty-attach-token.ts so a
-// second tab — including a Chrome "Duplicate tab" — gets its own PTY instead of
-// taking over this one. See #115304.
-
-// Channel id ties this chat tab's PTY child (publisher) to its sidebar
-// (subscriber).  Generated once per mount so a tab refresh starts a fresh
-// channel — the previous PTY child terminates with the old WS, and its
-// channel auto-evicts when no subscribers remain.
-function generateChannelId(scope?: string): string {
-  const prefix = scope ? "chat" : "chat-fresh";
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Math.random().toString(36).slice(2)}-${Date.now().toString(
-    36,
-  )}`;
-}
+import { SGR_MOUSE_RE } from "@/lib/pty-mouse-report";
+import { generateChannelId } from "@/lib/chat-channel-id";
 
 export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -666,11 +651,28 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       })().catch(reportImageUploadError);
     };
     const handleBrowserPaste = (ev: ClipboardEvent) => {
+      // Capture-phase on the host, so this runs before xterm's own paste
+      // listeners on the textarea / .xterm element (stopPropagation below
+      // keeps them from firing at all).
       const files = imageFilesFromTransfer(ev.clipboardData);
-      if (!files.length) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      uploadAndAttachImages(files);
+      if (files.length) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        uploadAndAttachImages(files);
+        return;
+      }
+      // Plain-text paste (#52471): xterm's own paste listener clears the
+      // hidden textarea, but the browser's default insert runs AFTER event
+      // dispatch, so the stale value survives and the next typed character
+      // gets duplicated ("when" → "whenn"). Cancel the native paste and
+      // deliver the text through term.paste() exactly once — the same route
+      // the Ctrl/Cmd+V keydown interception uses.
+      const text = ev.clipboardData?.getData("text/plain");
+      if (text) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        term.paste(text);
+      }
     };
     const handleBrowserDragOver = (ev: DragEvent) => {
       if (!transferMayContainImage(ev.dataTransfer)) return;
@@ -1488,9 +1490,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     // mouse reporting, so we drop SGR mouse reports entirely instead of
     // forwarding them into Hermes. Keyboard input, paste, and resize still
     // behave normally.
-      // eslint-disable-next-line no-control-regex -- intentional ESC byte in xterm SGR mouse report parser
-      const SGR_MOUSE_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
-      const forwardPtyData = (data: string, useMobileReplacement = true) => {
+    const forwardPtyData = (data: string, useMobileReplacement = true) => {
         // Mouse reports (scroll wheel etc.) are not typed input — swallow
         // them before the blocked-input check so scrolling a disconnected
         // terminal doesn't trip the "reconnecting" notice.
